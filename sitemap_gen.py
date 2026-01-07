@@ -2,6 +2,7 @@ import os
 import random
 import string
 import datetime
+import re
 
 def get_domain_from_cname():
     """Reads the domain name from the CNAME file."""
@@ -9,23 +10,19 @@ def get_domain_from_cname():
         with open('CNAME', 'r') as f:
             return f.read().strip()
     except FileNotFoundError:
-        # Fallback if CNAME is missing, though we expect it to exist
-        print("Warning: CNAME file not found. Please ensure it exists.")
+        print("Warning: CNAME file not found. Using default.")
         return "example.com"
 
 def get_all_html_files():
-    """Finds all HTML files in the repository, excluding common directories."""
+    """Finds all HTML files in the repository."""
     html_files = []
     for root, dirs, files in os.walk('.'):
-        # Skip hidden directories like .git
         if '.git' in dirs:
             dirs.remove('.git')
         
         for file in files:
             if file.endswith('.html'):
-                # Clean the path to be a URL-friendly path
                 full_path = os.path.join(root, file).replace('./', '')
-                # If it's index.html, we usually just want the directory path
                 if full_path.endswith('index.html'):
                     url_path = full_path[:-10]
                 else:
@@ -33,10 +30,10 @@ def get_all_html_files():
                 html_files.append(url_path)
     return html_files
 
-def generate_random_name(length=8):
+def generate_random_name(length=12):
     """Generates a random string for sitemap filenames."""
     letters = string.ascii_lowercase + string.digits
-    return ''.join(random.choice(letters) for i in range(length))
+    return 'sm_' + ''.join(random.choice(letters) for i in range(length)) + '.xml'
 
 def create_sitemap_chunk(urls, domain, filename):
     """Creates a single sitemap file for a list of URLs."""
@@ -45,19 +42,28 @@ def create_sitemap_chunk(urls, domain, filename):
     
     today = datetime.datetime.now().strftime('%Y-%m-%d')
     for url in urls:
-        full_url = f"https://{domain}/{url}"
+        # Avoid double slashes
+        clean_url = url.lstrip('/')
+        full_url = f"https://{domain}/{clean_url}"
         content += f'  <url>\n    <loc>{full_url}</loc>\n    <lastmod>{today}</lastmod>\n    <priority>0.8</priority>\n  </url>\n'
     
     content += '</urlset>'
     with open(filename, 'w') as f:
         f.write(content)
 
+def get_existing_sitemaps():
+    """Finds already existing sitemap files in the directory."""
+    # Matches files like sm_abc123.xml
+    pattern = re.compile(r'^sm_[a-z0-9]+\.xml$')
+    return [f for f in os.listdir('.') if pattern.match(f)]
+
 def create_main_index(sitemap_files, domain):
-    """Creates the main sitemap.xml index file."""
+    """Creates/Updates the main sitemap.xml index file with ALL sitemaps."""
     content = '<?xml version="1.0" encoding="UTF-8"?>\n'
     content += '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
     
-    for sm in sitemap_files:
+    # Sort to keep the file organized
+    for sm in sorted(list(set(sitemap_files))):
         content += f'  <sitemap>\n    <loc>https://{domain}/{sm}</loc>\n  </sitemap>\n'
     
     content += '</sitemapindex>'
@@ -78,23 +84,28 @@ def main():
     # Configuration: Max URLs per sitemap
     MAX_URLS = 2000
     
-    # Split URLs into chunks
+    # 1. Get current existing sitemaps before creating new ones
+    existing_sitemaps = get_existing_sitemaps()
+    
+    # 2. Split current site HTML files into chunks
     chunks = [all_urls[i:i + MAX_URLS] for i in range(0, len(all_urls), MAX_URLS)]
     
-    sitemap_filenames = []
-    for i, chunk in enumerate(chunks):
-        rand_name = f"sitemap_{generate_random_name()}.xml"
-        create_sitemap_chunk(chunk, domain, rand_name)
-        sitemap_filenames.append(rand_name)
-        print(f"Generated: {rand_name} with {len(chunk)} links.")
+    new_sitemap_filenames = []
+    for chunk in chunks:
+        new_name = generate_random_name()
+        create_sitemap_chunk(chunk, domain, new_name)
+        new_sitemap_filenames.append(new_name)
+        print(f"Generated new chunk: {new_name}")
 
-    # Generate main index
-    create_main_index(sitemap_filenames, domain)
-    print("Generated: sitemap.xml (Index)")
+    # 3. Combine old and new sitemaps for the index
+    total_sitemaps = existing_sitemaps + new_sitemap_filenames
+    
+    # 4. Update the main index file
+    create_main_index(total_sitemaps, domain)
+    print(f"Updated sitemap.xml with {len(total_sitemaps)} total sitemap files.")
 
-    # Generate robots.txt
+    # 5. Ensure robots.txt is there
     create_robots_txt(domain)
-    print("Generated: robots.txt")
 
 if __name__ == "__main__":
     main()
